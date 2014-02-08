@@ -7,6 +7,10 @@ Finding the longest shiritori with rglpk (GLPK for Ruby)
 The program is an implementation of the algorithm by Issei Sato.
 http://auemath.aichi-edu.ac.jp/~ykhashi/semi/2010note/08_issey_final.pdf (in Japanese)
 
+[SAMPLE WITH WEB-BROWSER]
+
+http://chiraura.hhiro.net/shiritori/ (in Japanese)
+
 [INSTALLATION]
 
 See https://github.com/wtaysom/rglpk .
@@ -25,7 +29,11 @@ rglpkで最長しりとりを見つける
 [参照]
 
 このプログラムは、佐藤一生氏によるアルゴリズムを実装したものです。
-http://auemath.aichi-edu.ac.jp/~ykhashi/semi/2010note/08_issey_final.pdf (in Japanese)
+http://auemath.aichi-edu.ac.jp/~ykhashi/semi/2010note/08_issey_final.pdf
+
+[Webブラウザで動くサンプル]
+
+http://chiraura.hhiro.net/shiritori/
 
 [インストール]
 
