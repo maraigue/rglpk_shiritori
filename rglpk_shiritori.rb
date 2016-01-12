@@ -147,9 +147,9 @@ STDERR.puts "Current best length: #{best_edges.size}"
       # 制約「今回連結だった頂点の集合と、それ以外の集合の間で、少なくとも1つの辺がある」
       # を追加する
         
-      rows = problem.add_rows(1)
-      rows[nodes.size + 2 + k].name = "C_{k=#{k}"
-      rows[nodes.size + 2 + k].set_bounds(Rglpk::GLP_LO, 1.0, 0.0)
+      row = problem.add_row
+      row.name = "C_{k=#{k}"
+      row.set_bounds(Rglpk::GLP_LO, 1.0, 0.0)
       
       nodes_begin.each_with_index do |nb, i|
         nodes_end.each_with_index do |ne, j|
