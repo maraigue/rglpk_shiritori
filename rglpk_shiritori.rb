@@ -6,7 +6,6 @@
 
 require "set"
 require "multiset"
-require "cgi"
 require "rglpk"
 
 class Object
