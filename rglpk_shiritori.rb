@@ -485,41 +485,39 @@ class ShiritoriSolver
     end
   end
   
-  def extract_results(results)
-    result_count = Multiset.new(results.flatten(1))
+  def ShiritoriSolver.extract(sh_prob, sh_path)
+    result_count = Multiset.new(sh_path.path)
     used_count = Hash.new{ |hash, key| hash[key] = 0 }
     note_number = -1
     note_list = Hash.new{ |hash, key| note_number += 1; hash[key] = note_number }
-    
+
     paths = []
     notes = []
     
-    results.each do |res|
-      paths << []
-      res.each_with_index do |r, i|
-        if result_count.count(r) == 1
-          if @sh_prob.links[r].size == 1
-            paths.last << @sh_prob.links[r][0]
-          else
-            paths.last << {:option => @sh_prob.links[r], :dup => 1}
-          end
-        elsif result_count.count(r) == @sh_prob.links[r].size
-          paths.last << @sh_prob.links[r][used_count[r]]
-          used_count[r] += 1
+    paths << []
+    sh_path.path.each_with_index do |r, i|
+      if result_count.count(r) == 1
+        if sh_prob.links[r].size == 1
+          paths.last << sh_prob.links[r][0]
         else
-          paths.last << {:option => @sh_prob.links[r], :dup => result_count.count(r), :key => r, :note => note_list[r]}
+          paths.last << {:option => sh_prob.links[r], :dup => 1}
         end
+      elsif result_count.count(r) == sh_prob.links[r].size
+        paths.last << sh_prob.links[r][used_count[r]]
+        used_count[r] += 1
+      else
+        paths.last << {:option => sh_prob.links[r], :dup => result_count.count(r), :key => r, :note => note_list[r]}
       end
     end
     
     note_list.keys.sort_by{ |r| note_list[r] }.each do |r|
-      notes << {:begin => r[0], :end => r[1], :words => @sh_prob.links[r], :count => result_count.count(r)}
+      notes << {:begin => r[0], :end => r[1], :words => sh_prob.links[r], :count => result_count.count(r)}
     end
     
     Result.new(paths, notes)
   end
-
-  def extract_result(result = @opt_path.path)
-    extract_results([result])
+  
+  def extract_result(result = @opt_path)
+    ShiritoriSolver.extract(@sh_prob, result)
   end
 end
