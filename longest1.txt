@@ -1,0 +1,7 @@
+ab
+bc
+cd
+da
+xy
+yz
+zx
