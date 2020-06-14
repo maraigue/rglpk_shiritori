@@ -187,7 +187,7 @@ module ShiritoriStatus
         cols[j].name = var
         bounds = ProblemBuilder.parse_range(@variables[var])
         cols[j].set_bounds(*bounds)
-        if bounds[1].kind_of?(Integer) and bounds[2].kind_of?(Integer)
+        if bounds[1].kind_of?(Integer) && bounds[2].kind_of?(Integer)
           cols[j].kind = Rglpk::GLP_IV
         else
           cols[j].kind = Rglpk::GLP_CV
@@ -212,11 +212,11 @@ module ShiritoriStatus
       # 係数を用意
       @coefficients.each_pair do |con, row|
         unless @constraints.include?(con)
-          raise RuntimeError, "Coefficients contain an undefined constraint #{con.inspect}"
+          raise RuntimeError, "Coefficients contain an undefined constraint #{con.inspect} (defined constraints: #{@constraints.keys.inspect})"
         end
         row.each_key do |var|
           unless @variables.include?(var)
-            raise RuntimeError, "Coefficients contain an undefined variable #{var.inspect}"
+            raise RuntimeError, "Coefficients contain an undefined variable #{var.inspect} (defined variables: #{@variables.keys.inspect})"
           end
         end
       end
@@ -240,7 +240,7 @@ module ShiritoriStatus
     # 返り値は[辺集合, 頂点集合]。辺集合は名前、頂点集合は番号。
     # ※頂点集合は番号で見るとダミー起点とダミー終点が重複しているのが気になるが、
     #   この問題の場合、ダミー起点とダミー終点は必ずともに連結成分に含まれるので問題ない
-    def retrieve_connected_edges_and_nodes(nodes, rglpk_problem)
+    def retrieve_connected_edges_and_nodes(sid, nodes, rglpk_problem)
       visited = Set.new
       stack = ["^"] # ダミー起点のみが入った状態
       result_edges = Multiset.new
@@ -254,7 +254,7 @@ module ShiritoriStatus
         nodes_end.each do |m|
           col = nil
           begin
-            col = rglpk_problem.cols["edge_#{n}#{m}"]
+            col = rglpk_problem.cols["prob#{sid}_edge_#{n}#{m}"]
           rescue ArgumentError
             # If no edge is found
             next
@@ -271,56 +271,105 @@ module ShiritoriStatus
     end
     private :retrieve_connected_edges_and_nodes
 
+    def list_common_links(common_links, rglpk_problem)
+      result = Multiset[]
+      common_links.each do |link|
+        result.add(link, Integer(rglpk_problem.cols["common_edge_#{link}"].mip_val))
+      end
+      result
+    end
+    private :list_common_links
+
     def xor(a, b)
       (!!a)^(!!b)
     end
-    
-    def initialize(sh_prob)
-      nodes_begin = sh_prob.nodes + ["^"] # 起点となれる文字（現れる全文字＋ダミー起点文字）
-      nodes_end = sh_prob.nodes + ["$"]   # 終点となれる文字（現れる全文字＋ダミー終点文字）
 
+    def initialize(*sh_probs)
+      initialize_main(sh_probs)
+    end
+
+    def initialize_main(sh_probs)
+      # 複数ある単語集合の、すべての単語数の和
+      maximum_length = 0
+      sh_probs.each do |sh_prob|
+        sh_prob.links.each_pair do |link, words|
+          maximum_length += words.size
+        end
+      end
+      
       # ---------- 対応する整数計画問題のオブジェクトを生成する
       pb = ProblemBuilder.new("name" => "shiritori", "obj.dir" => Rglpk::GLP_MAX)
       
-      # 制約式の名称および、制約式が取れる値の条件を入力。
-      # 初期状態では制約式の数は(sh_prob.nodes.size)+2。あとで増えていく
+      # 単語集合ごとに制約条件を作成
+      sh_probs.each_with_index do |sh_prob, sid|
+        nodes_begin = sh_prob.nodes + ["^"] # 起点となれる文字（現れる全文字＋ダミー起点文字）
+        nodes_end = sh_prob.nodes + ["$"]   # 終点となれる文字（現れる全文字＋ダミー終点文字）
 
-      sh_prob.nodes.each do |n|
-        # ダミー以外の文字については入次数＝出次数
-        pb.constraints["degree_#{n}"] = [0, 0]
-      end
-      pb.constraints["degree_^"] = [1, 1] # ダミー起点文字からの出次数は1
-      pb.constraints["degree_$"] = [-1, -1] # ダミー終点文字への入次数は1
-      
-      # 変数（辺）の名称および、変数が取れる値の条件を入力
-      # coefficientsは、出次数 - 入次数で計算
-      sh_prob.nodes.each do |n|
-        pb.variables["edge_^#{n}"] = [0, 1]
-        pb.coefficients["degree_^"]["edge_^#{n}"] = 1
-        pb.coefficients["degree_#{n}"]["edge_^#{n}"] = -1
+        # 制約式の名称および、制約式が取れる値の条件を入力。
+        # 初期状態では制約式の数は(sh_prob.nodes.size)+2。あとで増えていく
 
-        pb.variables["edge_#{n}$"] = [0, 1]
-        pb.coefficients["degree_#{n}"]["edge_#{n}$"] = 1
-        pb.coefficients["degree_$"]["edge_#{n}$"] = -1
-      end
+        sh_prob.nodes.each do |n|
+          # ダミー以外の文字については入次数＝出次数
+          pb.constraints["prob#{sid}_degree_#{n}"] = [0, 0]
+        end
+        pb.constraints["prob#{sid}_degree_^"] = [1, 1] # ダミー起点文字からの出次数は1
+        pb.constraints["prob#{sid}_degree_$"] = [-1, -1] # ダミー終点文字への入次数は1
+        
+        # 変数（辺）の名称および、変数が取れる値の条件を入力
+        # coefficientsは、出次数 - 入次数で計算
+        sh_prob.nodes.each do |n|
+          pb.variables["prob#{sid}_edge_^#{n}"] = [0, 1]
+          pb.coefficients["prob#{sid}_degree_^"]["prob#{sid}_edge_^#{n}"] = 1
+          pb.coefficients["prob#{sid}_degree_#{n}"]["prob#{sid}_edge_^#{n}"] = -1
 
-      sh_prob.links.each_pair do |link, words|
-        pb.variables["edge_#{link}"] = [0, words.size]
-        if link[0] != link[1]
-          pb.coefficients["degree_#{link[0]}"]["edge_#{link}"] = 1
-          pb.coefficients["degree_#{link[1]}"]["edge_#{link}"] = -1
-        else
-          pb.coefficients["degree_#{link[0]}"]["edge_#{link}"] = 0
-          pb.coefficients["degree_#{link[1]}"]["edge_#{link}"] = 0
+          pb.variables["prob#{sid}_edge_#{n}$"] = [0, 1]
+          pb.coefficients["prob#{sid}_degree_#{n}"]["prob#{sid}_edge_#{n}$"] = 1
+          pb.coefficients["prob#{sid}_degree_$"]["prob#{sid}_edge_#{n}$"] = -1
         end
 
-        pb.objective["edge_#{link}"] = 1 # 何を最大化したいか示す係数
-        # 今回の場合は、全変数の総和なので、1.0を並べたものを与える。
+        sh_prob.links.each_pair do |link, words|
+          pb.variables["prob#{sid}_edge_#{link}"] = [0, words.size]
+          if link[0] != link[1]
+            pb.coefficients["prob#{sid}_degree_#{link[0]}"]["prob#{sid}_edge_#{link}"] = 1
+            pb.coefficients["prob#{sid}_degree_#{link[1]}"]["prob#{sid}_edge_#{link}"] = -1
+          else
+            pb.coefficients["prob#{sid}_degree_#{link[0]}"]["prob#{sid}_edge_#{link}"] = 0
+            pb.coefficients["prob#{sid}_degree_#{link[1]}"]["prob#{sid}_edge_#{link}"] = 0
+          end
+
+          pb.objective["prob#{sid}_edge_#{link}"] = maximum_length # 何を最大化したいか示す係数
+          # 本来であれば、全変数の総和、すなわち1.0を並べたものを与えればよい。
+          # しかしこの設定では、「共通で利用された辺の数」も見たいため、その数を超える数を
+          # それぞれについて指定する。
+        end
+      end
+
+      # 単語集合どうしで、共通で利用された回数を見る
+      # まずは、全単語集合で共通で利用されている辺を得る
+      common_links = nil
+      sh_probs.each do |sh_prob|
+        if common_links
+          common_links &= sh_prob.links.keys
+        else
+          common_links = sh_prob.links.keys
+        end
+      end
+
+      # 次に、それらの辺について、使われた回数が一番少ないものと同じ値を取るような変数を作る
+      common_links.each do |link|
+        pb.variables["common_edge_#{link}"] = [0, nil]
+        sh_probs.each_with_index do |sh_prob, sid|
+          pb.coefficients["used_common_edge_#{link}_prob#{sid}"]["prob#{sid}_edge_#{link}"] = 1
+          pb.coefficients["used_common_edge_#{link}_prob#{sid}"]["common_edge_#{link}"] = -1
+          pb.constraints["used_common_edge_#{link}_prob#{sid}"] = [0, nil]
+        end
+        pb.objective["common_edge_#{link}"] = 1
       end
       
       # ---------- 最長経路が確定するまでループ
       k = 0
       @best = []
+      @best_length = 0
       while true
         STDERR.puts "k == #{k}"
         rglpk_problem = pb.build
@@ -332,28 +381,43 @@ module ShiritoriStatus
           break
         end
           
-        len = rglpk_problem.obj.get
+        # len = rglpk_problem.obj.get
           
         code = rglpk_problem.mip
         if code != 0
           STDERR.puts "Unexpected Error: MIP solver ended with the code #{GLP_CONSTANTS[code]}."
           break
         end
-          
-        len = rglpk_problem.obj.mip - sh_prob.words.size * k
-          
-STDERR.puts "Current upper bound of length: #{len}"
-        # 結果として得られた経路が連結か？
-        connected_edges, connected_nodes = retrieve_connected_edges_and_nodes(sh_prob.nodes, rglpk_problem)
         
+        objval = Integer(rglpk_problem.obj.mip)
+        lenbase = objval - sh_probs.size * maximum_length * maximum_length * k
+        len = lenbase / maximum_length
+        common = lenbase % maximum_length
+        
+STDERR.puts "Current upper bound of length: #{len}"
+
+        connected_edges = [nil] * sh_probs.size
+        connected_nodes = [nil] * sh_probs.size
+        len_connected = 0
+        sh_probs.each_with_index do |sh_prob, sid|
+          # 結果として得られた経路が連結か？
+          connected_edges[sid], connected_nodes[sid] = retrieve_connected_edges_and_nodes(sid, sh_prob.nodes, rglpk_problem)
+          len_connected += connected_edges[sid].size - 2 # ダミー始点やダミー終点も含んでいるため、2つ減らさないとならない。
+        end
+
+STDERR.puts "Connected length: #{len_connected}"
+
         # ----- 使った辺がすべて連結なら、そこで終了
-        if len == connected_edges.size - 2 # ダミー始点やダミー終点も含んでいるため、2つ減らさないとならない。
-          @best = connected_edges if connected_edges.size > @best.size
+        if len == len_connected
+          if len_connected > @best_length
+            @best = connected_edges
+            @common_links = list_common_links(common_links, rglpk_problem)
+          end
           break
         end
         
         # ----- 連結でない場合、
-        if len < @best.size
+        if len < @best_length
           # もし今回「可能性あり」と判断された（連結ではないかもしれない）
           # 辺を集めても前回の結果に及ばない場合は打ち切り
           # （繰り返すたびに制約は増える＝結果がよくなることはない）
@@ -361,38 +425,160 @@ STDERR.puts "Current upper bound of length: #{len}"
         end
           
         # 今回連結と判断された辺が暫定1位か判定
-        @best = connected_edges if connected_edges.size > @best.size
-STDERR.puts "Current best length (picking up only connected): #{@best.size - 2}"
+        if len_connected > @best_length
+          @best = connected_edges
+          @common_links = list_common_links(common_links, rglpk_problem)
+          @best_length = len_connected
+          STDERR.puts "Current best length (picking up only connected): #{@best_length}"
+        end
         
         # 変数「今回連結だった頂点の集合と、それ以外の集合の間を結ぶような辺を使ったこと」を追加する
         # これが一つも利用されなかった場合、スコアが強制的に引き下げられる（全単語数分だけ引かれる）
-        pb.variables["connected_#{k}"] = [0, 1]
-        pb.constraints["set_connected_#{k}"] = [0, nil]
-        sh_prob.links.each_key do |link|
-          if xor(connected_nodes.include?(link[0]), connected_nodes.include?(link[1]))
-            pb.coefficients["set_connected_#{k}"]["edge_#{link}"] = 1
+        sh_probs.each_with_index do |sh_prob, sid|
+          pb.variables["prob#{sid}_connected_#{k}"] = [0, 1]
+          pb.constraints["prob#{sid}_set_connected_#{k}"] = [0, nil]
+          sh_prob.links.each_key do |link|
+            if xor(connected_nodes[sid].include?(link[0]), connected_nodes[sid].include?(link[1]))
+              pb.coefficients["prob#{sid}_set_connected_#{k}"]["prob#{sid}_edge_#{link}"] = 1
+            end
           end
+          pb.coefficients["prob#{sid}_set_connected_#{k}"]["prob#{sid}_connected_#{k}"] = -1
+          pb.objective["prob#{sid}_connected_#{k}"] = maximum_length * maximum_length
         end
-        pb.coefficients["set_connected_#{k}"]["connected_#{k}"] = -1
-        pb.objective["connected_#{k}"] = sh_prob.words.size
 
         k += 1
       end
     end
-    attr_reader :best
+    attr_reader :best, :best_length, :common_links
   end
 
   class OptimalPath
-    def initialize(opt_edge)
+    def initialize(best_status)
       # ---------- 具体的に最長経路を出力
-      best_nodes = opt_edge.best.each_item.map{ |e| e.chars.to_a }.flatten.uniq
-      best_edges = opt_edge.best.deep_dup
+      best_edges_by_origin = Multimap.new
+      best_status.each_with_count do |edge, count|
+        best_edges_by_origin[edge[0]].add(edge, count)
+      end
+
+      cycles = []
+      # 閉路を取り出す。ただしダミー起点文字を起点とする閉路は存在しないので無視
+      best_edges_by_origin.each_pair_list do |origin, edges|
+        next if origin == "^"
+        
+        # 特例：もし1単語でループをなす場合
+        self_loop = origin + origin
+        if edges.include?(self_loop)
+          edges.count(self_loop).times do
+            cycles << [self_loop]
+          end
+          edges.delete(self_loop, edges.count(self_loop))
+        end
+      end
+
+      loop_found = true
+      while loop_found
+        loop_found = false
+        best_edges_by_origin.each_pair_list do |origin, edges|
+          # ループを探索
+          stack = edges.items.map{ |i| {:seq => [i], :used => Set[i[0], i[1]]} }
+          until stack.empty?
+            loop_temp = stack.pop
+            next if loop_temp[:seq][-1][1] == "$"
+
+            best_edges_by_origin[loop_temp[:seq][-1][1]].each_item do |e|
+              if loop_temp[:used].include?(e[1])
+                # loop_temp[:seq] のいくつ目からループになっているか?
+                loop_begin = nil
+                loop_temp[:seq].each_index do |i|
+                  if loop_temp[:seq][i][0] == e[1]
+                    loop_begin = i
+                    break
+                  end
+                end
+                raise "Unexpected error" unless loop_begin
+
+                new_cycle = loop_temp[:seq][loop_begin..-1] + [e]
+
+                cycles << new_cycle
+
+                new_cycle.each do |e|
+                  if best_edges_by_origin[e[0]].count(e) == 0
+                    raise "Unexpected error: Loop #{new_cycle} is detected but #{e} is no longer kept in the set of edges #{best_edges_by_origin}"
+                  end
+                  best_edges_by_origin[e[0]].delete(e)
+                end
+
+                loop_found = true
+                break
+              else
+                stack << {:seq => loop_temp[:seq] + [e], :used => loop_temp[:used] + [e[1]] }
+              end
+            end
+            break if loop_found
+          end
+          break if loop_found
+        end
+      end
+      @cycles = cycles.deep_dup
+      
+      # この時点で、best_edges_by_originは一本道になっていないとならない
+      # それらを順番にしてstackに入れる
+      stack = []
+      char = "^"
+      until char == "$"
+        next_chars = best_edges_by_origin[char].to_a
+        if next_chars.size != 1
+          raise "Unexpected error: Semi-Eulerian graph must produce a simple path after removing all cycles (next character: #{char}, candidates: #{next_chars.inspect}, current graph: #{best_edges_by_origin.inspect})"
+        end
+        stack << next_chars[0]
+        best_edges_by_origin.delete(char)
+        char = next_chars[0][1]
+      end
+      unless best_edges_by_origin.empty?
+        raise "Unexpected error: Semi-Eulerian graph must produce a simple path after removing all cycles (current graph: #{best_edges_by_origin.inspect})"
+      end
+      @noncycle_path = stack.deep_dup
+
+      @path = []
+      used_chars = Set[]
+      until stack.empty?
+        e = stack.shift
+        @path << e
+        unless used_chars.include?(e[1])
+          used_chars << e[1]
+          
+          cycles.delete_if{ |cycle|
+            pos = cycle.index{ |c| c[0] == e[1] }
+            if pos
+              stack = cycle[pos..-1] + cycle[0...pos] + stack
+              true
+            else
+              false
+            end
+          }
+        end
+      end
+      unless cycles.empty?
+        raise StandardError, "Unexpected error: not all cycles consumed (remained: #{cycles})"
+      end
+
+      @path.pop
+      @path.shift
+      @noncycle_path.pop
+      @noncycle_path.shift
+
+=begin
+      # ---------- 具体的に最長経路を出力
+      best_nodes = best_status.each_item.map{ |e| e.chars.to_a }.flatten.uniq
+      best_edges = best_status.deep_dup
 
       # 閉路を長さ1のものから順次抽出
       cycles = []
       cycle_size = 1
       while true
-        # ループを抜ける条件：どの頂点についても出次数が1以下
+        # ループを抜ける条件：
+        # 1. どの頂点についても出次数が1以下
+        # 2. 連結である
         flag_loop_remains = false
         outdegs = Hash.new{ |hash, key| hash[key] = 0 }
         best_edges.each do |e|
@@ -402,6 +588,7 @@ STDERR.puts "Current best length (picking up only connected): #{@best.size - 2}"
             break
           end
         end
+        
         break unless flag_loop_remains
         
         # 長さcycle_sizeの閉路を見つける
@@ -436,7 +623,7 @@ STDERR.puts "Current best length (picking up only connected): #{@best.size - 2}"
         
         cycle_size += 1
       end
-      
+
       # 残ったbest_edgesを並び替え、適宜cyclesを繋ぐ
       @cycles = cycles.deep_dup
       
@@ -457,6 +644,7 @@ STDERR.puts "Current best length (picking up only connected): #{@best.size - 2}"
         end
         
         @path << w
+        puts "DEBUG: #{w}"
         break if w[1] == "$"
         
         # 当該文字の閉路があれば入れる
@@ -464,13 +652,19 @@ STDERR.puts "Current best length (picking up only connected): #{@best.size - 2}"
         matching_cycles.reverse.each{ |x| queue = x + queue }
       end
       
-      #assert(best_edges.empty?)
-      #assert(cycles.empty?)
+      unless best_edges.empty?
+        raise StandardError, "Unexpected error: not all edges consumed (remained: #{best_edges})"
+      end
+      unless 
+        raise StandardError, "Unexpected error: not all cycles consumed (remained: #{cycles})"
+      end
+      p @path.size
       
       @path.pop
       @path.shift
       @noncycle_path.pop
       @noncycle_path.shift
+=end
     end
     attr_reader :cycles, :noncycle_path, :path
     # @cyclesは閉路集合、@noncycle_pathは閉路を抜き取った残りの経路、@pathは全経路
@@ -478,38 +672,46 @@ STDERR.puts "Current best length (picking up only connected): #{@best.size - 2}"
 end
 
 class ShiritoriSolver
-  def initialize(words)
-    @sh_prob = ShiritoriStatus::Problem.new(words)
-    @opt_edge = ShiritoriStatus::OptimalEdges.new(@sh_prob)
-    @opt_path = ShiritoriStatus::OptimalPath.new(@opt_edge)
+  def initialize(*words)
+    @sh_probs = words.map{ |ws| ShiritoriStatus::Problem.new(ws) }
+    @opt_edge = ShiritoriStatus::OptimalEdges.new(*@sh_probs)
+    @opt_path = @opt_edge.best.map{ |b| ShiritoriStatus::OptimalPath.new(b) }
   end
 
-  def words
-    @sh_prob.words
+  def size
+    @sh_probs.size
+  end
+
+  def words(index)
+    @sh_probs[index].words
   end
   
-  def links
-    @sh_prob.links
+  def links(index)
+    @sh_probs[index].links
   end
   
-  def nodes
-    @sh_prob.nodes
+  def nodes(index)
+    @sh_probs[index].nodes
   end
 
   def optimal_edges
     @opt_edge.best
   end
 
-  def cycles
-    @opt_path.cycles
+  def optimal_common_links
+    @opt_edge.common_links
+  end
+
+  def cycles(index)
+    @opt_path[index].cycles
   end
   
-  def noncycle_path
-    @opt_path.noncycle_path
+  def noncycle_path(index)
+    @opt_path[index].noncycle_path
   end
   
-  def path
-    @opt_path.path
+  def path(index)
+    @opt_path[index].path
   end
   
   # 最終的な経路を表すクラス
@@ -592,7 +794,7 @@ class ShiritoriSolver
     Result.new(paths, notes)
   end
   
-  def extract_result(result = @opt_path)
-    ShiritoriSolver.extract(@sh_prob, result)
+  def extract_result
+    @opt_path.each_index.map{ |i| ShiritoriSolver.extract(@sh_probs[i], @opt_path[i]) }
   end
 end
